@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  ocrDemo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - DEBIAN_FRONTEND=noninteractive
+        # - GITHUB_TOKEN=${GITHUB_TOKEN}
+
+    image: "ocrdemo:1.0"
+    network_mode: "host"
+    container_name: ocrboat
+    privileged: true
+    #restart: on-failure
+    # environment:
+    #   - TCP_PORT=5556
+    volumes:
+      - /home/frinksserver/Deepak/OCR/deployed/ocrDemoDocker/model_weights:/ocrDemo/model_weights
+      - /home/frinksserver/Deepak/OCR/deployed/ocrDemoDocker/img_test:/ocrDemo/img_test
+      - /home/frinksserver/Deepak/OCR/deployed/ocrDemoDocker/results:/ocrDemo/results
+      - /home/frinksserver/Deepak/OCR/deployed/ocrDemoDocker/scripts:/ocrDemo/scripts
+      - /etc/timezone:/etc/timezone
+      - /etc/localtime:/etc/localtime
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+
+    working_dir: /ocrDemo/scripts
+    command: python3 run_detection.py
+    # command: sleep infinity
