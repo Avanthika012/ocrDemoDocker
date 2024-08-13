@@ -1,0 +1,5 @@
+# ninja log v5
+0	15838	1721644506686102009	/home/frinksserver/Deepak/OCR/FAST/models/post_processing/ccl/build/temp.linux-x86_64-cpython-38/ccl.o	9263ce0d3b9857f7
+0	27973	1721644518814227407	/home/frinksserver/Deepak/OCR/FAST/models/post_processing/ccl/build/temp.linux-x86_64-cpython-38/ccl_cuda.o	1795a5a6b4a93cc4
+0	21875	1723099235001115863	/home/frinksserver/Deepak/OCR/fast_docker_test/models/post_processing/ccl/build/temp.linux-x86_64-cpython-38/ccl.o	58326d97c0c04512
+0	27498	1723099240629251220	/home/frinksserver/Deepak/OCR/fast_docker_test/models/post_processing/ccl/build/temp.linux-x86_64-cpython-38/ccl_cuda.o	2526f1e7ee8c4f45

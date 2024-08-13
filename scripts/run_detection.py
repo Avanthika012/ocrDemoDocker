@@ -11,18 +11,65 @@ import json
 from tqdm import tqdm 
 import math
 import PIL
-
+import copy
 
 
 
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
+# # Print current working directory
+# print("Current working directory:", os.getcwd())
 
-sys.path.append(os.path.join(os.path.dirname(__file__), 'models'))
+# # Add the current directory and its parent to sys.path
+# current_dir = os.path.dirname(os.path.abspath(__file__))
+# parent_dir = os.path.dirname(current_dir)
+# sys.path.insert(0, current_dir)
+# sys.path.insert(0, parent_dir)
 
-from models.fasterrcnn_inference import FasterRCNN
-from models.paddleocr.tools.infer.predict_rec import PaddleOCRx
-# Get the logger
+# # Print sys.path
+# print("Python sys.path in run_detection.py:")
+# for path in sys.path:
+#     print(path)
+
+# # List contents of the modelsx/fast directory
+# fast_dir = os.path.join(current_dir, 'modelsx', 'fast')
+# if os.path.exists(fast_dir):
+#     print("\nContents of modelsx/fast directory:")
+#     for item in os.listdir(fast_dir):
+#         print(item)
+
+# # Now try to import
+# try:
+#     from modelsx.fast.custom_inference import FASTx
+#     print("Successfully imported FASTx")
+# except ImportError as e:
+#     print(f"Import error: {e}")
+#     import traceback
+#     traceback.print_exc()
+
+
+def recursive_add(path):
+    if os.path.isdir(path):
+        # print(path)
+        sys.path.append(path)
+        for dir_name in os.listdir(path):
+
+            # print(os.path.join(path, dir_name))
+            
+            recursive_add(os.path.join(path, dir_name))
+
+# for name in os.listdir(main_path):
+#     print(os.path.join(main_path, name))
+
+#     sys.path.append(os.path.join(main_path, name))
+recursive_add(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modelsx'))
+
+
+
+from modelsx.fasterrcnn_inference import FasterRCNN
+from modelsx.paddleocr.tools.infer.predict_rec import PaddleOCRx
+from modelsx.fast.custom_inference import FASTx
+# # Get the logger
 from logger_setup import get_logger
 logger = get_logger(__name__, "ocr.log", console_output=True)
 
@@ -35,17 +82,27 @@ class OCR():
 
     def __init__(self,params,logger,res_path="./results"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.text_detection_model_name = params["use_model"]
+        self.text_recog_model_name = params["use_ocr_model"]
+        print(f"\n\n self.text_detection_model_name:{self.text_detection_model_name}\n\n ")
+
 
 
         ### loading the model
-        if params["use_model"] == "fasterrcnn":
+        if self.text_detection_model_name == "fasterrcnn":
             self.model = FasterRCNN(model_weights=params["models"]["fasterrcnn"]["model_weights"], classes=params["classes"], device=self.device, detection_thr=params["models"]["fasterrcnn"]["det_th"])
             self.det_th = params["models"]["fasterrcnn"]["det_th"]
+            self.det_box_type = "quad"
             print(f"FasterRCNN model created!!!")
 
+        elif self.text_detection_model_name == "fast":
+            self.model = FASTx(model_weights=params["models"]["fast"]["model_weights"], config=params["models"]["fast"]["config"],min_score=params["models"]["fast"]["min_score"],min_area=params["models"]["fast"]["min_area"],ema=params["models"]["fast"]["ema"])
+            self.det_th = params["models"]["fast"]["det_th"]
+            self.det_box_type = "poly"
+            print(f"FAST model created!!!")
         else:
             self.model = None
-        if params["use_ocr_model"] == "paddleocr":
+        if self.text_recog_model_name == "paddleocr":
             print(f"__init__ OCR: initiating PaddleOCRx")
             self.ocr_model = PaddleOCRx(model_weights=params["ocr_models"]["paddleocr"]["model_weights"],rec_char_dict_path=params["ocr_models"]["paddleocr"]["rec_char_dict_path"])
             print(f"PaddleOCRx model created for text RECOG task!!!")
@@ -59,150 +116,222 @@ class OCR():
         self.draw_img_save_dir =  res_path
         os.makedirs(self.draw_img_save_dir, exist_ok=True)
 
+    def imgCrop(self,ori_im,dt_boxes):
+        img_crop_list = []
+        dt_boxes_list = []
+
+        for bno in range(len(dt_boxes)):
+            tmp_box = copy.deepcopy(dt_boxes[bno])
+            if self.det_box_type == "quad":
+                img_crop = self.get_rotate_crop_image(ori_im, tmp_box)
+            else:
+                img_crop = self.get_minarea_rect_crop(ori_im, tmp_box)
+            img_crop_list.append(img_crop)
+            dt_boxes_list.append(tmp_box)
+        return img_crop_list,dt_boxes_list
+
+    def sorted_boxes(self,dt_boxes):
+        """
+        Sort text boxes in order from top to bottom, left to right
+        args:
+            dt_boxes(array):detected text boxes with shape [4, 2]
+        return:
+            sorted boxes(array) with shape [4, 2]
+        """
+        num_boxes = dt_boxes.shape[0]
+        sorted_boxes = sorted(dt_boxes, key=lambda x: (x[0][1], x[0][0]))
+        _boxes = list(sorted_boxes)
+
+        for i in range(num_boxes - 1):
+            for j in range(i, -1, -1):
+                if abs(_boxes[j + 1][0][1] - _boxes[j][0][1]) < 10 and (
+                    _boxes[j + 1][0][0] < _boxes[j][0][0]
+                ):
+                    tmp = _boxes[j]
+                    _boxes[j] = _boxes[j + 1]
+                    _boxes[j + 1] = tmp
+                else:
+                    break
+        return _boxes
+
+    def model_predcition(self,image,model):
+        if self.text_detection_model_name =="fasterrcnn":
+            dt_boxes, class_names, scores = model(image)
+            dt_boxes = [self.increase_bbox_area_lengthwise(i) for i in dt_boxes]
+
+            ### converting to paddle format
+            dt_boxes =  self.convert_bbox_fasterrcnn2paddle(dt_boxes)
+        elif self.text_detection_model_name == "fast":
+            dt_boxes = model(image)
+        else:
+            print(f"[ERROR] Detection model not specified!!!")
+            raise 
+        print(f"\n\ndt_boxes:{dt_boxes} type:{type(dt_boxes)} shape:{dt_boxes.shape}\n\n")
+        
+        dt_boxes = self.sorted_boxes(dt_boxes)
+        print(f"\n\ndt_boxes after sorted_boxes:{dt_boxes}\n\n")
+
+        return dt_boxes
+
 
     def __call__(self,image,img_name=None, manualEntryx=None):
         st = time.time()
+        org_img = image.copy()
         ### -------- TEXT DETECTION --------
-        boxes, class_names, scores = self.model(image)
-        # print(f"[INFO] {datetime.datetime.now()}: time taken for text detection {time.time() - st } seconds")
-        self.logger.info(f"[INFO] time taken for text detection {time.time() - st } seconds x {len(class_names)} no. of texts detected!!!")
+        dt_boxes = self.model_predcition(image=image,model=self.model)
+        self.logger.info(f"[INFO] time taken for text detection {time.time() - st } seconds")
         detected_texts = []
         detection_scores = []
         detected_bboxes = []
 
-        ### looping through all detected BBoxes or texts on an image
-        for i in range(len(class_names)): 
-            if scores[i]>=self.det_th: 
-                # x1,y1,x2,y2 = boxes[i]
-                x1,y1,x2,y2  = self.increase_bbox_area_lengthwise(boxes[i])
-                x1,y1,x2,y2 = int(x1),int(y1),int(x2),int(y2)
-                cname= class_names[i]
-                detected_bboxes.append([int(x1),int(y1),int(x2),int(y2) ])
+        print(f"org_img:{org_img.shape}")
 
-                #### --------    OCR WORK    ----------------
-                if self.ocr_model !=None:
-                    cropped_image = image[y1:y2, x1:x2]
+        img_crop_list,detected_bboxes = self.imgCrop(ori_im=org_img,dt_boxes=dt_boxes)
 
-                    st = time.time() 
-                    ocr_text,score = self.ocr_model(cropped_image)
-                    detected_texts.append(ocr_text)
-                    detection_scores.append(score)
-                    
-                    # print(f"[INFO] {datetime.datetime.now()}: time taken for text recognition {time.time() - st }  seconds")
-                    self.logger.info(f"[INFO] time taken for text recognition {time.time() - st } seconds x detected texts: {detected_texts} detection_scores:{detection_scores}")
+        if self.ocr_model !=None:
+            for cropped_image in img_crop_list:
+                st = time.time() 
+                cv2.imwrite(f"crop_{time.time()}.png",cropped_image)
 
-        ### plotting results and saving images 
-        draw_img = self.draw_ocr_box_txt(
-            image=Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)),
-            boxes=detected_bboxes,
-            txts=detected_texts,
-            scores=detection_scores,
-            drop_score=self.drop_score,
-            manualEntryx=manualEntryx
-        )
-        ### saving output image
-        img_save_name = os.path.join(self.draw_img_save_dir, img_name[:-4] if img_name != None else str(self.img_count))+".png"
-        cv2.imwrite(
-            img_save_name,
-            draw_img[:, :, ::-1],
-        )
-        self.logger.debug(
-            "The visualized image saved in {}".format(
-                img_save_name
-            )
-        )
+                ocr_text,score = self.ocr_model(cropped_image)
+                detected_texts.append(ocr_text)
+                detection_scores.append(score)
+                
+                # print(f"[INFO] {datetime.datetime.now()}: time taken for text recognition {time.time() - st }  seconds")
+                self.logger.info(f"[INFO] time taken for text recognition {time.time() - st } seconds x detected texts: {detected_texts} detection_scores:{detection_scores}")
 
+
+
+        # ### plotting results and saving images 
+
+
+        # ### saving output image
+        # img_save_name = os.path.join(self.draw_img_save_dir, img_name[:-4] if img_name != None else str(self.img_count))+".png"
+        # cv2.imwrite(
+        #     img_save_name,
+        #     draw_img[:, :, ::-1],
+        # )
+        # self.logger.debug(
+        #     "The visualized image saved in {}".format(
+        #         img_save_name
+        #     )
+        # )
+
+
+
+        img_save_name ="TEST"
         
         return detected_texts,img_save_name
+
+    def get_rotate_crop_image(self,img, points):
+        """
+        img_height, img_width = img.shape[0:2]
+        left = int(np.min(points[:, 0]))
+        right = int(np.max(points[:, 0]))
+        top = int(np.min(points[:, 1]))
+        bottom = int(np.max(points[:, 1]))
+        img_crop = img[top:bottom, left:right, :].copy()
+        points[:, 0] = points[:, 0] - left
+        points[:, 1] = points[:, 1] - top
+        """
+        assert len(points) == 4, "shape of points must be 4*2"
+        img_crop_width = int(
+            max(
+                np.linalg.norm(points[0] - points[1]), np.linalg.norm(points[2] - points[3])
+            )
+        )
+        img_crop_height = int(
+            max(
+                np.linalg.norm(points[0] - points[3]), np.linalg.norm(points[1] - points[2])
+            )
+        )
+        pts_std = np.float32(
+            [
+                [0, 0],
+                [img_crop_width, 0],
+                [img_crop_width, img_crop_height],
+                [0, img_crop_height],
+            ]
+        )
+        M = cv2.getPerspectiveTransform(points, pts_std)
+        dst_img = cv2.warpPerspective(
+            img,
+            M,
+            (img_crop_width, img_crop_height),
+            borderMode=cv2.BORDER_REPLICATE,
+            flags=cv2.INTER_CUBIC,
+        )
+        dst_img_height, dst_img_width = dst_img.shape[0:2]
+        if dst_img_height * 1.0 / dst_img_width >= 1.5:
+            dst_img = np.rot90(dst_img)
+        return dst_img
+
+
+
+    def get_minarea_rect_crop(self,img, points):
+        bounding_box = cv2.minAreaRect(np.array(points).astype(np.int32))
+        points = sorted(list(cv2.boxPoints(bounding_box)), key=lambda x: x[0])
+
+        index_a, index_b, index_c, index_d = 0, 1, 2, 3
+        if points[1][1] > points[0][1]:
+            index_a = 0
+            index_d = 1
+        else:
+            index_a = 1
+            index_d = 0
+        if points[3][1] > points[2][1]:
+            index_b = 2
+            index_c = 3
+        else:
+            index_b = 3
+            index_c = 2
+
+        box = [points[index_a], points[index_b], points[index_c], points[index_d]]
+        crop_img = self.get_rotate_crop_image(img, np.array(box))
+        return crop_img
+    def get_rotate_crop_image(self,img, points):
+        """
+        img_height, img_width = img.shape[0:2]
+        left = int(np.min(points[:, 0]))
+        right = int(np.max(points[:, 0]))
+        top = int(np.min(points[:, 1]))
+        bottom = int(np.max(points[:, 1]))
+        img_crop = img[top:bottom, left:right, :].copy()
+        points[:, 0] = points[:, 0] - left
+        points[:, 1] = points[:, 1] - top
+        """
+        assert len(points) == 4, "shape of points must be 4*2"
+        img_crop_width = int(
+            max(
+                np.linalg.norm(points[0] - points[1]), np.linalg.norm(points[2] - points[3])
+            )
+        )
+        img_crop_height = int(
+            max(
+                np.linalg.norm(points[0] - points[3]), np.linalg.norm(points[1] - points[2])
+            )
+        )
+        pts_std = np.float32(
+            [
+                [0, 0],
+                [img_crop_width, 0],
+                [img_crop_width, img_crop_height],
+                [0, img_crop_height],
+            ]
+        )
+        M = cv2.getPerspectiveTransform(points, pts_std)
+        dst_img = cv2.warpPerspective(
+            img,
+            M,
+            (img_crop_width, img_crop_height),
+            borderMode=cv2.BORDER_REPLICATE,
+            flags=cv2.INTER_CUBIC,
+        )
+        dst_img_height, dst_img_width = dst_img.shape[0:2]
+        if dst_img_height * 1.0 / dst_img_width >= 1.5:
+            dst_img = np.rot90(dst_img)
+        return dst_img
     
-
-    # def draw_ocr_box_txt(self,
-    #     image,
-    #     boxes,
-    #     txts=None,
-    #     scores=None,
-    #     drop_score=0.5,
-    #     font_path="./models/paddleocr/doc/fonts/simfang.ttf",
-    #     font_size_factor=5,
-    #     manualEntryx=None
-    # ):
-    #     # Validate the font_size_factor
-    #     if not (0.5 <= font_size_factor <= 10.0):
-    #         raise ValueError("font_size_factor should be between 0.5 and 10.0")
-
-    #     h, w = image.height, image.width
-    #     font = ImageFont.truetype(font_path, int(20 * font_size_factor))
-
-    #     # Filter out texts based on scores
-    #     valid_texts = [txt for idx, txt in enumerate(txts) if scores is None or scores[idx] >= drop_score]
-
-    #     img_show = image.copy()
-
-    #     if manualEntryx is not None:
-    #         manual_entries = manualEntryx.strip().lower()  # Normalize to lower case
-    #     else:
-    #         manual_entries = None
-
-    #     print(f"Drawing on canvas : valid_texts:{valid_texts}")
-
-    #     pass_status = "Failed"
-    #     status_color = (255, 0, 0)  # Red for failed
-
-    #     if manual_entries is not None:
-    #         for text in valid_texts:
-    #             normalized_text = text.strip().lower()
-    #             if any(char in manual_entries for char in normalized_text):
-    #                 pass_status = "Passed"
-    #                 status_color = (0, 255, 0)  # Green for passed
-    #                 break
-
-    #     # Calculate new height for the status
-    #     line_height = 100  # Height of the line with some margin
-    #     new_h = img_show.height + line_height + 40  # Add some margin at the top
-    #     new_img = Image.new("RGB", (w, new_h), (0, 0, 0))  # Set background color to black
-    #     new_img.paste(img_show, (0, 0))
-
-    #     draw = ImageDraw.Draw(new_img)
-    #     y_offset = img_show.height + 20  # Start drawing text below the current image with some margin
-
-    #     # Draw the status text with color
-    #     draw.text((10, y_offset), pass_status, fill=status_color, font=font)
-
-    #     img_show = new_img  # Update the image with the newly created image
-
-    #     return np.array(img_show)
-    def draw_ocr_box_txt(self,
-        image,
-        boxes,
-        txts=None,
-        scores=None,
-        drop_score=0.5,
-        font_path="./models/paddleocr/doc/fonts/simfang.ttf",
-        manualEntryx=None
-    ):
-        h, w = image.height, image.width
-        img_left = image.copy()
-        img_right = np.ones((h, w, 3), dtype=np.uint8) * 255
-        random.seed(0)
-        boxes = self.convert_bbox_format(boxes) ### converting into an array with dtype=float32 for polygon drawing
-        draw_left = ImageDraw.Draw(img_left)
-        if txts is None or len(txts) != len(boxes):
-            txts = [None] * len(boxes)
-        for idx, (box, txt) in enumerate(zip(boxes, txts)):
-            if scores is not None and scores[idx] < drop_score:
-                continue
-            color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-
-            draw_left.polygon(box, fill=color)
-            img_right_text = self.draw_box_txt_fine((w, h), box, txt, font_path)
-            pts = np.array(box, np.int32).reshape((-1, 1, 2))
-            cv2.polylines(img_right_text, [pts], True, color, 1)
-            img_right = cv2.bitwise_and(img_right, img_right_text)
-        img_left = Image.blend(image, img_left, 0.5)
-        img_show = Image.new("RGB", (w * 2, h), (255, 255, 255))
-        img_show.paste(img_left, (0, 0, w, h))
-        img_show.paste(Image.fromarray(img_right), (w, 0, w * 2, h))
-        return np.array(img_show)
     
     def increase_bbox_area_lengthwise(self, bbox, factor=1.05):
         """
@@ -231,85 +360,39 @@ class OCR():
 
         return [new_x1, new_y1, new_x2, new_y2]
 
-    def convert_bbox_format(self, bboxes):
+    def convert_bbox_fasterrcnn2paddle(self, bboxes):
         """
-        Convert bounding boxes from [[x1, y1, x2, y2]] format to [[[x1, y1], [x2, y1], [x2, y2], [x1, y2]]] format,
+        Convert bounding boxes from [[x1, y1, x2, y2]] format to [[[y1,x1], [y1,x2], [y2,x2], [y2,x1]]] format,
         after increasing the area lengthwise by 10%.
         
         Parameters:
         bboxes (list): A list of bounding boxes, each in [x1, y1, x2, y2] format.
         
         Returns:
-        list: A list of bounding boxes, each in [[[x1, y1], [x2, y1], [x2, y2], [x1, y2]]] format as numpy arrays with dtype float32.
+        list: A list of bounding boxes, each in [[[y1,x1], [y1,x2], [y2,x2], [y2,x1]]] format as numpy arrays with dtype float32.
         """
         converted_bboxes = []
         for bbox in bboxes:
             # increased_bbox = self.increase_bbox_area_lengthwise(bbox)
             x1, y1, x2, y2 = bbox
-            box = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+            box = np.array([[y1,x1], [y1,x2], [y2,x2], [y2,x1]], dtype=np.float32)
             converted_bboxes.append(box)
-        return converted_bboxes
-
-    def draw_box_txt_fine(self,img_size, box, txt, font_path="./models/paddleocr/doc/fonts/simfang.ttf"):
-        box_height = int(
-            math.sqrt((box[0][0] - box[3][0]) ** 2 + (box[0][1] - box[3][1]) ** 2)
-        )
-        box_width = int(
-            math.sqrt((box[0][0] - box[1][0]) ** 2 + (box[0][1] - box[1][1]) ** 2)
-        )
-
-        if box_height > 2 * box_width and box_height > 30:
-            img_text = Image.new("RGB", (box_height, box_width), (255, 255, 255))
-            draw_text = ImageDraw.Draw(img_text)
-            if txt:
-                font = self.create_font(txt, (box_height, box_width), font_path)
-                draw_text.text([0, 0], txt, fill=(0, 0, 0), font=font)
-            img_text = img_text.transpose(Image.ROTATE_270)
-        else:
-            img_text = Image.new("RGB", (box_width, box_height), (255, 255, 255))
-            draw_text = ImageDraw.Draw(img_text)
-            if txt:
-                font = self.create_font(txt, (box_width, box_height), font_path)
-                draw_text.text([0, 0], txt, fill=(0, 0, 0), font=font)
-
-        pts1 = np.float32(
-            [[0, 0], [box_width, 0], [box_width, box_height], [0, box_height]]
-        )
-        pts2 = np.array(box, dtype=np.float32)
-        M = cv2.getPerspectiveTransform(pts1, pts2)
-
-        img_text = np.array(img_text, dtype=np.uint8)
-        img_right_text = cv2.warpPerspective(
-            img_text,
-            M,
-            img_size,
-            flags=cv2.INTER_NEAREST,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(255, 255, 255),
-        )
-        return img_right_text
+        return np.array(converted_bboxes)
 
 
-    def create_font(self,txt, sz, font_path="./models/paddleocr/doc/fonts/simfang.ttf"):
-        font_size = int(sz[1] * 0.99)
-        font = ImageFont.truetype(font_path, font_size, encoding="utf-8")
-        if int(PIL.__version__.split(".")[0]) < 10:
-            length = font.getsize(txt)[0]
-        else:
-            length = font.getlength(txt)
 
-        if length > sz[0]:
-            font_size = int(font_size * sz[0] / length)
-            font = ImageFont.truetype(font_path, font_size, encoding="utf-8")
-        return font
+
 
 
 
 def main():
     try:
-        with open('./model_jsons/paramx.json', 'r') as f:
+        # with open('./model_jsons/paramx.json', 'r') as f: ### docker 
+        with open('./model_jsons/paramx_nodocker.json', 'r') as f: ### without docker 
+
             params = json.load(f)
         # Initialize the OCR model with the result path
+        print(f"\n\n\n\n::::::::::::::::::::::\n\n\n")
         ocr_modelx = OCR(params,logger=logger,res_path=params["output_dir"])
     except:
         print(f"\n [ERROR] {datetime.datetime.now()} OCR model loading failed!!!\n ")

@@ -1,0 +1,43 @@
+{
+    "models": {
+
+      "fasterrcnn": {
+        "model_weights":"/home/frinksserver/deployedNdemo/ocrDemoDocker/model_weights/fasterrcnnmodel_best.pth",
+        "det_th": 0.8,
+        "iou_th": 0.4
+      },
+
+      "fast": {
+        "model_weights":"/home/frinksserver/deployedNdemo/ocrDemoDocker/model_weights/checkpoint.pth.tar",
+        "config": "/home/frinksserver/deployedNdemo/ocrDemoDocker/scripts/modelsx/fast/config/fast/ctw/fast_base_ctw_640_finetune_ic17mlt.py",
+        "min_score": 0.86,
+        "min_area":250,
+        "ema":true,
+        "det_th": 0.8
+
+      }
+    },
+
+    "ocr_models": {
+        "paddleocr": {
+          "model_weights":"/home/frinksserver/deployedNdemo/ocrDemoDocker/model_weights/rec_ocrv4_jul18_len50_split_working",
+          "rec_char_dict_path":"/home/frinksserver/deployedNdemo/ocrDemoDocker/model_weights/v4_new/en_dict.txt"
+
+        }
+      },
+        
+    "classes":["text"],
+    "video_dir":null,
+    "image_dir":"/home/frinksserver/deployedNdemo/ocrDemoDocker/img_test/model_1",
+
+    "custom_name":"honda_demo_out",
+    "use_model":"fasterrcnn",
+    "use_ocr_model":"paddleocr",
+
+    "output_dir":"/home/frinksserver/deployedNdemo/ocrDemoDocker/results",
+    "lowfpsvid":false
+
+
+
+
+}

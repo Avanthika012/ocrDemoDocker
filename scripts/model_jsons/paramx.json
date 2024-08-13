@@ -5,6 +5,17 @@
         "model_weights":"/ocrDemo/model_weights/fasterrcnn_honda_jul18_ocr.pth",
         "det_th": 0.8,
         "iou_th": 0.4
+      },
+
+
+      "fast": {
+        "model_weights":"/ocrDemo/model_weights/fasterrcnn_honda_jul18_ocr.pth",
+        "config": "/ocrDemo/models/fast/config/fast/ctw/fast_base_ctw_640_finetune_ic17mlt.py",
+        "min_score": 0.86,
+        "min_area":250,
+        "ema":true,
+        "det_box_type":"poly"
+
       }
     },
 
