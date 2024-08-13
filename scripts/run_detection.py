@@ -361,21 +361,22 @@ class OCR():
         return [new_x1, new_y1, new_x2, new_y2]
 
     def convert_bbox_fasterrcnn2paddle(self, bboxes):
+
         """
-        Convert bounding boxes from [[x1, y1, x2, y2]] format to [[[y1,x1], [y1,x2], [y2,x2], [y2,x1]]] format,
+        Convert bounding boxes from [[x1, y1, x2, y2]] format to [[[x1, y1], [x2, y1], [x2, y2], [x1, y2]]] format,
         after increasing the area lengthwise by 10%.
         
         Parameters:
         bboxes (list): A list of bounding boxes, each in [x1, y1, x2, y2] format.
         
         Returns:
-        list: A list of bounding boxes, each in [[[y1,x1], [y1,x2], [y2,x2], [y2,x1]]] format as numpy arrays with dtype float32.
+        list: A list of bounding boxes, each in [[[x1, y1], [x2, y1], [x2, y2], [x1, y2]]] format as numpy arrays with dtype float32.
         """
         converted_bboxes = []
         for bbox in bboxes:
             # increased_bbox = self.increase_bbox_area_lengthwise(bbox)
             x1, y1, x2, y2 = bbox
-            box = np.array([[y1,x1], [y1,x2], [y2,x2], [y2,x1]], dtype=np.float32)
+            box = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
             converted_bboxes.append(box)
         return np.array(converted_bboxes)
 

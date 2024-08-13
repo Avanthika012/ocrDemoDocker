@@ -31,7 +31,7 @@
     "image_dir":"/home/frinksserver/deployedNdemo/ocrDemoDocker/img_test/model_1",
 
     "custom_name":"honda_demo_out",
-    "use_model":"fasterrcnn",
+    "use_model":"fast",
     "use_ocr_model":"paddleocr",
 
     "output_dir":"/home/frinksserver/deployedNdemo/ocrDemoDocker/results",
